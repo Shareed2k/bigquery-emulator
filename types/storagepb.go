@@ -6,6 +6,9 @@ import (
 )
 
 func TableToProto(t *bigqueryv2.Table) *storagepb.TableSchema {
+	if t == nil || t.Schema == nil {
+		return &storagepb.TableSchema{}
+	}
 	return &storagepb.TableSchema{
 		Fields: TableFieldSchemasToProto(t.Schema.Fields),
 	}

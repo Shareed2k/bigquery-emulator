@@ -458,6 +458,52 @@ func newLoadCSVReader(reader io.Reader, fieldDelimiter string) (*csv.Reader, err
 	return csvReader, nil
 }
 
+func inferJSONSchema(records []map[string]interface{}) *bigqueryv2.TableSchema {
+	if len(records) == 0 {
+		return &bigqueryv2.TableSchema{}
+	}
+
+	fieldMap := make(map[string]*bigqueryv2.TableFieldSchema)
+
+	for _, record := range records {
+		for k, v := range record {
+			if _, exists := fieldMap[k]; exists {
+				continue
+			}
+
+			var fieldType string
+			switch v.(type) {
+			case string:
+				fieldType = "STRING"
+			case bool:
+				fieldType = "BOOL"
+			case float64, json.Number:
+				fieldType = "FLOAT64"
+			case []interface{}:
+				fieldType = "STRING"
+			case map[string]interface{}:
+				fieldType = "STRING"
+			default:
+				fieldType = "STRING"
+			}
+
+			fieldMap[k] = &bigqueryv2.TableFieldSchema{
+				Name: k,
+				Type: fieldType,
+			}
+		}
+	}
+
+	var fields []*bigqueryv2.TableFieldSchema
+	for _, f := range fieldMap {
+		fields = append(fields, f)
+	}
+
+	return &bigqueryv2.TableSchema{
+		Fields: fields,
+	}
+}
+
 func schemaColumns(fields []*bigqueryv2.TableFieldSchema) []*types.Column {
 	columns := make([]*types.Column, 0, len(fields))
 	for _, field := range fields {
@@ -638,18 +684,44 @@ func (h *uploadContentHandler) Handle(ctx context.Context, r *uploadContentReque
 			data = append(data, rowData.(map[string]interface{}))
 		}
 	case "NEWLINE_DELIMITED_JSON":
+		decoder := json.NewDecoder(r.reader)
+		decoder.UseNumber()
+
+		var parsedRecords []map[string]interface{}
+		for decoder.More() {
+			var raw interface{}
+			if err := decoder.Decode(&raw); err != nil {
+				return err
+			}
+			switch v := raw.(type) {
+			case []interface{}:
+				for _, item := range v {
+					if obj, ok := item.(map[string]interface{}); ok {
+						parsedRecords = append(parsedRecords, obj)
+					}
+				}
+			case map[string]interface{}:
+				parsedRecords = append(parsedRecords, v)
+			}
+		}
+
+		if !tableExisted && load.Schema == nil && load.Autodetect {
+			schema := inferJSONSchema(parsedRecords)
+			load.Schema = schema
+			tableContent.Schema = schema
+		}
+
+		if tableContent.Schema == nil || tableContent.Schema.Fields == nil {
+			return fmt.Errorf("schema is required for NEWLINE_DELIMITED_JSON unless autodetect is true and successful")
+		}
+
 		columns = schemaColumns(tableContent.Schema.Fields)
 		columnMap := map[string]*types.Column{}
 		for _, col := range columns {
 			columnMap[col.Name] = col
 		}
-		decoder := json.NewDecoder(r.reader)
-		decoder.UseNumber()
-		for decoder.More() {
-			d := make(map[string]interface{})
-			if err := decoder.Decode(&d); err != nil {
-				return err
-			}
+		
+		for _, d := range parsedRecords {
 			h.normalizeColumnNameForJSONData(columnMap, d)
 			data = append(data, d)
 		}

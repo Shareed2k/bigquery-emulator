@@ -20,6 +20,7 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	grpc_status "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -985,18 +986,18 @@ func getIDsFromPath(path string) (string, string, string, error) {
 func getTableMetadata(ctx context.Context, server *Server, projectID, datasetID, tableID string) (*bigqueryv2.Table, error) {
 	project, err := server.metaRepo.FindProject(ctx, projectID)
 	if err != nil {
-		return nil, err
+		return nil, grpc_status.Error(codes.Internal, err.Error())
 	}
 	if project == nil {
-		return nil, fmt.Errorf("project %s is not found", projectID)
+		return nil, grpc_status.Errorf(codes.NotFound, "project %s is not found", projectID)
 	}
 	dataset := project.Dataset(datasetID)
 	if dataset == nil {
-		return nil, fmt.Errorf("dataset %s is not found in project %s", datasetID, projectID)
+		return nil, grpc_status.Errorf(codes.NotFound, "dataset %s is not found in project %s", datasetID, projectID)
 	}
 	table := dataset.Table(tableID)
 	if table == nil {
-		return nil, fmt.Errorf("table %s is not found in dataset %s", tableID, datasetID)
+		return nil, grpc_status.Errorf(codes.NotFound, "table %s is not found in dataset %s", tableID, datasetID)
 	}
 	return table.Content()
 }
